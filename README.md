@@ -16,7 +16,7 @@ laboratorio-css-grid/
 Copie a pasta para o servidor de casa e rode, dentro dela:
 
 ```bash
-docker compose up -d --build
+docker compose --env-file .env -f infra/docker-compose.yml up -d
 ```
 
 Teste no próprio servidor:
@@ -68,11 +68,93 @@ Fica disponível em `https://<nome-do-servidor>.<sua-tailnet>.ts.net`.
 Edite `site/index.html` e rode de novo:
 
 ```bash
-docker compose up -d --build
+docker compose --env-file .env -f infra/docker-compose.yml up -d
 ```
 
 O nginx envia o HTML com `Cache-Control: no-cache`, então os alunos recebem a versão nova ao recarregar.
 Se o Cloudflare estiver com cache agressivo no domínio, faça *Purge Cache* após atualizar.
+
+## Deploy automático (GitHub Actions + Tailscale)
+
+A cada `git push` na branch `main`, o workflow `.github/workflows/deploy.yml`:
+
+1. constrói a imagem e publica no GitHub Container Registry (`ghcr.io/<usuario>/<repo>:sha-xxxxxxx`);
+2. entra na sua tailnet como uma máquina temporária com a tag `tag:ci`;
+3. acessa o servidor por SSH (Tailscale SSH), copia `deploy/docker-compose.yml` e roda `docker compose pull && up -d`;
+4. confere se `/healthz` respondeu.
+
+Nenhuma porta precisa ser aberta no roteador.
+
+### Configuração (uma vez só)
+
+**Tailscale — políticas de acesso** (admin console → Access controls). Acrescente:
+
+```jsonc
+"tagOwners": {
+  "tag:ci":       ["autogroup:admin"],
+  "tag:servidor": ["autogroup:admin"]
+},
+"ssh": [
+  {
+    "action": "accept",
+    "src":    ["tag:ci"],
+    "dst":    ["tag:servidor"],
+    "users":  ["deploy"]          // usuário Linux usado no deploy
+  }
+]
+```
+
+O Tailscale só permite SSH de uma máquina com tag para outra **com tag**, então
+o servidor precisa da `tag:servidor`: no admin console, em Machines → servidor →
+*Edit ACL tags*. Máquinas com tag não expiram a chave, o que é bom para um servidor.
+
+Se você usa regras `acls` (e não só o padrão "tudo liberado"), libere também
+`tag:ci` → servidor nas portas `22` e `8080`.
+
+**Tailscale — OAuth client** (Settings → OAuth clients → *Generate*): escopo
+`auth_keys` (escrita) com a tag `tag:ci`. Guarde o *client ID* e o *secret*.
+
+**No servidor de casa:**
+
+```bash
+sudo tailscale set --ssh
+```
+
+```bash
+sudo usermod -aG docker deploy
+```
+
+Se o repositório for **privado**, a imagem no GHCR também será. Faça login uma vez
+no servidor, como o usuário `deploy`, com um token clássico do GitHub com escopo `read:packages`:
+
+```bash
+docker login ghcr.io -u SEU_USUARIO_GITHUB
+```
+
+(Alternativa: em GitHub → Packages → a imagem → *Package settings*, torne-a pública.)
+
+**No GitHub** (repo → Settings → Environments → *New environment* `producao`):
+
+| Tipo | Nome | Valor |
+|---|---|---|
+| Secret | `TS_OAUTH_CLIENT_ID` | client ID do OAuth do Tailscale |
+| Secret | `TS_OAUTH_SECRET` | secret do OAuth do Tailscale |
+| Variable | `DEPLOY_HOST` | nome do servidor no Tailscale (ex.: `servidor-casa`) |
+| Variable | `DEPLOY_USER` | `deploy` |
+| Variable | `DEPLOY_DIR` | opcional; padrão `laboratorio-css-grid` (relativo à home) |
+
+Antes do primeiro deploy automático, pare o container criado manualmente
+(`docker compose down` na pasta antiga), pois os dois usam o mesmo nome e a porta 8080.
+
+### Voltar para uma versão anterior
+
+Cada deploy usa uma tag com o hash do commit. No servidor:
+
+```bash
+cd ~/laboratorio-css-grid && echo IMAGE=ghcr.io/<usuario>/<repo>:sha-abc1234 > .env && docker compose up -d
+```
+
+Ou, no GitHub, rode de novo (*Re-run*) o workflow de um commit antigo.
 
 ## Observações
 

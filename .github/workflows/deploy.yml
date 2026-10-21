@@ -1,0 +1,85 @@
+name: Build e deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Nunca roda dois deploys ao mesmo tempo
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Nome da imagem (GHCR exige minúsculas)
+        id: meta
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "latest=ghcr.io/${GITHUB_REPOSITORY,,}:latest" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: producao
+    env:
+      HOST: ${{ vars.DEPLOY_HOST }}          # nome do servidor no Tailscale
+      USER: ${{ vars.DEPLOY_USER }}          # usuário no servidor (no grupo docker)
+      DIR: ${{ vars.DEPLOY_DIR || 'laboratorio-css-grid' }}
+      IMAGE: ${{ needs.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: infra
+
+      - name: Entrar na tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Enviar compose e atualizar o container
+        run: |
+          SSH="ssh -o StrictHostKeyChecking=accept-new $USER@$HOST"
+          $SSH "mkdir -p $DIR"
+          scp -o StrictHostKeyChecking=accept-new infra/docker-compose.yml "$USER@$HOST:$DIR/docker-compose.yml"
+          $SSH "cd $DIR && echo IMAGE=$IMAGE > .env && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f"
+
+      - name: Verificar se o site respondeu
+        run: |
+          for i in $(seq 1 10); do
+            curl -fsS "http://$HOST:8080/healthz" && exit 0
+            sleep 3
+          done
+          echo "O site não respondeu em /healthz" >&2
+          exit 1

@@ -1,14 +1,12 @@
+# Compose usado no servidor de casa. O GitHub Actions copia este arquivo
+# para lá e grava a imagem a usar no arquivo .env (IMAGE=ghcr.io/...:sha-xxxxxxx).
 services:
-  bizo-ensino:
-    build: .
-    image: bizo-ensino-web:latest
-    container_name: bizo-ensino-web
+  css-grid-lab:
+    image: ${IMAGE:?defina IMAGE no arquivo .env}
+    container_name: laboratorio-css-grid
     restart: unless-stopped
     ports:
-      # Escuta em todas as interfaces: o cloudflared (no host) usa localhost:8080
-      # e as máquinas do Tailscale usam http://<nome-do-servidor>:8080.
-      # Para restringir ao próprio servidor, troque por "127.0.0.1:8080:80".
-      - "127.0.0.1:8080:80"
+      - "8080:80"
     read_only: true
     tmpfs:
       - /var/cache/nginx
