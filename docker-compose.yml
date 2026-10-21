@@ -1,0 +1,18 @@
+services:
+  bizo-ensino:
+    build: .
+    image: bizo-ensino-web:latest
+    container_name: bizo-ensino-web
+    restart: unless-stopped
+    ports:
+      # Escuta em todas as interfaces: o cloudflared (no host) usa localhost:8080
+      # e as máquinas do Tailscale usam http://<nome-do-servidor>:8080.
+      # Para restringir ao próprio servidor, troque por "127.0.0.1:8080:80".
+      - "127.0.0.1:8080:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
