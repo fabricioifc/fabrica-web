@@ -1,4 +1,6 @@
 *
-!Dockerfile
-!nginx.conf
+!infra/
+!infra/Dockerfile
+!infra/nginx.conf
 !site/
+!site/**

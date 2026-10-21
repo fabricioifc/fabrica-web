@@ -1,0 +1,16 @@
+# Compose usado no servidor de casa. O GitHub Actions copia este arquivo
+# para lá e grava a imagem a usar no arquivo .env (IMAGE=ghcr.io/...:sha-xxxxxxx).
+services:
+  css-grid-lab:
+    image: ${IMAGE:?defina IMAGE no arquivo .env}
+    container_name: laboratorio-css-grid
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
