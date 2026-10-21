@@ -8,7 +8,7 @@ Requer Docker Desktop em execução. Na raiz do projeto, inicie o modo de
 desenvolvimento:
 
 ```bash
-docker compose -f infra/docker-compose.dev.yml up --build
+docker compose -f infra/docker-compose.yml up --build
 ```
 
 Acesse http://localhost:8080. O diretório `site/` é montado no container:
@@ -18,16 +18,18 @@ imagem. Este modo não usa GHCR nem precisa da variável `IMAGE`.
 Para parar, pressione `Ctrl+C` e rode:
 
 ```bash
-docker compose -f infra/docker-compose.dev.yml down
+docker compose -f infra/docker-compose.yml down
 ```
 
 ```
 laboratorio-css-grid/
-├── site/index.html              # a aplicação
-├── nginx.conf                   # configuração do nginx
-├── Dockerfile
-├── docker-compose.yml
-└── laboratorio-css-grid.html    # versão do Artifact (não é usada pelo Docker)
+├── site/index.html                    # aplicação
+├── infra/
+│   ├── docker-compose.yml             # desenvolvimento local
+│   ├── docker-compose.prod.yml        # produção
+│   ├── Dockerfile
+│   └── nginx.conf
+└── examples/laboratorio-css-grid.html # versão alternativa
 ```
 
 ## 1. Subir o container
@@ -35,7 +37,7 @@ laboratorio-css-grid/
 Copie a pasta para o servidor de casa e rode, dentro dela:
 
 ```bash
-docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file infra/.env -f infra/docker-compose.prod.yml up -d
 ```
 
 Teste no próprio servidor:
@@ -87,7 +89,7 @@ Fica disponível em `https://<nome-do-servidor>.<sua-tailnet>.ts.net`.
 Edite `site/index.html` e rode de novo:
 
 ```bash
-docker compose --env-file .env -f infra/docker-compose.yml up -d
+docker compose --env-file infra/.env -f infra/docker-compose.prod.yml up -d
 ```
 
 O nginx envia o HTML com `Cache-Control: no-cache`, então os alunos recebem a versão nova ao recarregar.
@@ -99,45 +101,36 @@ A cada `git push` na branch `main`, o workflow `.github/workflows/deploy.yml`:
 
 1. constrói a imagem e publica no GitHub Container Registry (`ghcr.io/<usuario>/<repo>:sha-xxxxxxx`);
 2. entra na sua tailnet como uma máquina temporária com a tag `tag:ci`;
-3. acessa o servidor por SSH (Tailscale SSH), copia `deploy/docker-compose.yml` e roda `docker compose pull && up -d`;
+3. acessa o servidor por SSH com chave, copia `infra/docker-compose.prod.yml` e roda `docker compose -f docker-compose.prod.yml pull` e `up -d`;
 4. confere se `/healthz` respondeu.
 
 Nenhuma porta precisa ser aberta no roteador.
 
 ### Configuração (uma vez só)
 
-**Tailscale — políticas de acesso** (admin console → Access controls). Acrescente:
+**Tailscale — políticas de acesso** (admin console → Access controls). A tag `tag:ci`
+precisa ter acesso TCP ao servidor nas portas SSH configurada no servidor e `8080`
+(verificação de saúde). Por exemplo, se o SSH usa a porta `2222`, permita TCP nas
+portas `2222` e `8080` de `tag:ci` para `tag:servidor`.
 
-```jsonc
-"tagOwners": {
-  "tag:ci":       ["autogroup:admin"],
-  "tag:servidor": ["autogroup:admin"]
-},
-"ssh": [
-  {
-    "action": "accept",
-    "src":    ["tag:ci"],
-    "dst":    ["tag:servidor"],
-    "users":  ["deploy"]          // usuário Linux usado no deploy
-  }
-]
-```
-
-O Tailscale só permite SSH de uma máquina com tag para outra **com tag**, então
-o servidor precisa da `tag:servidor`: no admin console, em Machines → servidor →
-*Edit ACL tags*. Máquinas com tag não expiram a chave, o que é bom para um servidor.
-
-Se você usa regras `acls` (e não só o padrão "tudo liberado"), libere também
-`tag:ci` → servidor nas portas `22` e `8080`.
+O servidor precisa ter a tag `tag:servidor`: no admin console, em Machines →
+servidor → *Edit ACL tags*. A conexão SSH do workflow usa o `sshd` normal do
+servidor e uma chave SSH; ela não usa Tailscale SSH.
 
 **Tailscale — OAuth client** (Settings → OAuth clients → *Generate*): escopo
 `auth_keys` (escrita) com a tag `tag:ci`. Guarde o *client ID* e o *secret*.
 
-**No servidor de casa:**
+**No servidor de casa:** instale a chave pública correspondente à chave privada
+do GitHub no `~deploy/.ssh/authorized_keys` (ou no diretório home do usuário
+configurado). Gere o par de chaves em uma máquina confiável:
 
 ```bash
-sudo tailscale set --ssh
+ssh-keygen -t ed25519 -C "github-actions-deploy" -f github-actions-deploy
 ```
+
+Cadastre `github-actions-deploy.pub` no servidor e guarde o conteúdo da chave
+privada `github-actions-deploy` no secret `DEPLOY_SSH_PRIVATE_KEY`. Não envie a
+chave privada ao repositório. O usuário também precisa ter acesso ao Docker:
 
 ```bash
 sudo usermod -aG docker deploy
@@ -158,8 +151,10 @@ docker login ghcr.io -u SEU_USUARIO_GITHUB
 |---|---|---|
 | Secret | `TS_OAUTH_CLIENT_ID` | client ID do OAuth do Tailscale |
 | Secret | `TS_OAUTH_SECRET` | secret do OAuth do Tailscale |
+| Secret | `DEPLOY_SSH_PRIVATE_KEY` | chave privada SSH autorizada no servidor |
 | Variable | `DEPLOY_HOST` | nome do servidor no Tailscale (ex.: `servidor-casa`) |
 | Variable | `DEPLOY_USER` | `deploy` |
+| Variable | `DEPLOY_SSH_PORT` | porta SSH do servidor (padrão `22`) |
 | Variable | `DEPLOY_DIR` | opcional; padrão `laboratorio-css-grid` (relativo à home) |
 
 Antes do primeiro deploy automático, pare o container criado manualmente
@@ -170,7 +165,7 @@ Antes do primeiro deploy automático, pare o container criado manualmente
 Cada deploy usa uma tag com o hash do commit. No servidor:
 
 ```bash
-cd ~/laboratorio-css-grid && echo IMAGE=ghcr.io/<usuario>/<repo>:sha-abc1234 > .env && docker compose up -d
+cd ~/laboratorio-css-grid && echo IMAGE=ghcr.io/<usuario>/<repo>:sha-abc1234 > .env && docker compose -f docker-compose.prod.yml up -d
 ```
 
 Ou, no GitHub, rode de novo (*Re-run*) o workflow de um commit antigo.
@@ -182,4 +177,4 @@ Ou, no GitHub, rode de novo (*Re-run*) o workflow de um commit antigo.
   no endereço do Tailscale, e vice-versa. Não há banco de dados nem login.
 - As fontes vêm do Google Fonts. Sem internet, a página continua funcionando com fontes do sistema.
 - Para servir só para o próprio servidor (sem acesso pela rede local/Tailscale),
-  troque a porta no `docker-compose.yml` por `"127.0.0.1:8080:80"`.
+  troque a porta em `infra/docker-compose.prod.yml` por `"127.0.0.1:8080:80"`.

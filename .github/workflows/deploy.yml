@@ -54,6 +54,7 @@ jobs:
     env:
       HOST: ${{ vars.DEPLOY_HOST }}          # nome do servidor no Tailscale
       USER: ${{ vars.DEPLOY_USER }}          # usuário no servidor (no grupo docker)
+      SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
       DIR: ${{ vars.DEPLOY_DIR || 'laboratorio-css-grid' }}
       IMAGE: ${{ needs.build.outputs.image }}
     steps:
@@ -68,12 +69,23 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
+      - name: Configurar chave SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::error::Configure o secret DEPLOY_SSH_PRIVATE_KEY no environment producao."
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy_key"
+          echo "SSH_KEY=$RUNNER_TEMP/deploy_key" >> "$GITHUB_ENV"
+
       - name: Enviar compose e atualizar o container
         run: |
-          SSH="ssh -o StrictHostKeyChecking=accept-new $USER@$HOST"
-          $SSH "mkdir -p $DIR"
-          scp -o StrictHostKeyChecking=accept-new infra/docker-compose.yml "$USER@$HOST:$DIR/docker-compose.yml"
-          $SSH "cd $DIR && echo IMAGE=$IMAGE > .env && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f"
+          ssh -p "$SSH_PORT" -i "$SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$USER@$HOST" "mkdir -p '$DIR'"
+          scp -P "$SSH_PORT" -i "$SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new infra/docker-compose.prod.yml "$USER@$HOST:$DIR/docker-compose.prod.yml"
+          ssh -p "$SSH_PORT" -i "$SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$USER@$HOST" "cd '$DIR' && printf '%s\n' 'IMAGE=$IMAGE' > .env && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d --remove-orphans && docker image prune -f"
 
       - name: Verificar se o site respondeu
         run: |
